@@ -1,0 +1,25 @@
+[project]
+name = "vllm-image-mcp"
+version = "0.1.0"
+description = "MCP server for AI-powered image generation via vLLM-Omni compatible endpoints"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "Pillow>=10.0.0",
+]
+
+[project.scripts]
+vllm-image-mcp = "vllm_image_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vllm_image_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
