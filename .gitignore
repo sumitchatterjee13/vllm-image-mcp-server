@@ -19,9 +19,13 @@ venv/
 
 # Project-specific
 planning_docs/
+panning_docs/
 .claude/
 .kilocode/
 .cursor/
+
+# Tests (not shipped)
+tests/
 
 # OS
 Thumbs.db
