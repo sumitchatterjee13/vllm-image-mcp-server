@@ -243,15 +243,23 @@ async def _run_batch_background(
 
     batch_state.results = processed
     batch_state.total_time = round(total_time, 2)
-    batch_state.final_result = {
+
+    # Truncate results for context window friendliness
+    max_shown = 20
+    shown_results = processed[:max_shown]
+    final: dict[str, Any] = {
         "status": "completed",
         "batch_id": batch_state.batch_id,
         "total_time_seconds": round(total_time, 2),
         "images_generated": succeeded,
         "images_failed": failed,
         "max_concurrent": concurrency,
-        "results": processed,
+        "results": shown_results,
     }
+    if len(processed) > max_shown:
+        final["note"] = f"Showing first {max_shown} of {len(processed)} results."
+
+    batch_state.final_result = final
     batch_state.finished = True
     logger.info("Batch %s completed: %d succeeded, %d failed in %.1fs",
                 batch_state.batch_id, succeeded, failed, total_time)
@@ -300,8 +308,8 @@ async def cancel_batch(batch_id: str) -> dict[str, Any]:
 async def check_batch_progress(batch_id: str) -> dict[str, Any]:
     """Check the progress of a running batch generation.
 
-    Returns full results once the batch is finished, then removes it from
-    the active list.
+    Completed batches are cached — calling this multiple times on a finished
+    batch always returns the same results.
     """
     if batch_id not in active_batches:
         return {
@@ -309,15 +317,14 @@ async def check_batch_progress(batch_id: str) -> dict[str, Any]:
             "batch_id": batch_id,
             "message": (
                 f"Batch '{batch_id}' not found. "
-                "It may have already completed, been cancelled, or never existed."
+                "It may have been cancelled or never existed."
             ),
         }
 
     batch_state = active_batches[batch_id]
 
-    # If the batch is finished, return the full results and clean up
+    # Completed batches return cached results (never deleted)
     if batch_state.finished and batch_state.final_result is not None:
-        active_batches.pop(batch_id, None)
         return batch_state.final_result
 
     elapsed = (datetime.now(timezone.utc) - batch_state.created_at).total_seconds()
@@ -327,7 +334,8 @@ async def check_batch_progress(batch_id: str) -> dict[str, Any]:
     cancelled_count = sum(1 for t in batch_state.tasks if t.cancelled())
     in_progress = batch_state.total - completed - failed - cancelled_count
 
-    # Build individual image statuses
+    # Build individual image statuses (truncate to 20 for context window)
+    max_shown = 20
     image_statuses: list[dict[str, Any]] = []
     for i, task in enumerate(batch_state.tasks):
         prompt_text = batch_state.prompts[i] if i < len(batch_state.prompts) else "unknown"
@@ -361,7 +369,7 @@ async def check_batch_progress(batch_id: str) -> dict[str, Any]:
                 "prompt": prompt_text[:80],
             })
 
-    return {
+    response: dict[str, Any] = {
         "status": "in_progress",
         "batch_id": batch_id,
         "total": batch_state.total,
@@ -371,8 +379,17 @@ async def check_batch_progress(batch_id: str) -> dict[str, Any]:
         "cancelled": cancelled_count,
         "elapsed_seconds": round(elapsed, 1),
         "is_cancelled": batch_state.cancelled,
-        "images": image_statuses,
+        "images": image_statuses[:max_shown],
+        "message": (
+            f"{completed} done, {in_progress} still processing. "
+            "Wait at least 50 seconds before calling check_batch_progress again."
+        ),
     }
+
+    if len(image_statuses) > max_shown:
+        response["note"] = f"Showing first {max_shown} of {batch_state.total} images."
+
+    return response
 
 
 async def list_active_batches() -> dict[str, Any]:
