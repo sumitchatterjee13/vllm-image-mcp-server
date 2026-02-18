@@ -68,8 +68,10 @@ def create_server(args: argparse.Namespace) -> FastMCP:
             "'jpg' for general use (good compression), 'png' for lossless quality (default).\n"
             "- FLUX Klein models support up to 4K resolution (3840x2160). Use '16:9_4k' or "
             "'9:16_4k' aspect ratios for maximum detail when the user needs high-resolution output.\n"
-            "- For batch generations, use check_batch_progress to poll every ~50 seconds "
-            "to monitor progress and prevent timeouts."
+            "- BATCH WORKFLOW: batch_generate returns IMMEDIATELY with a batch_id. Images generate in the background. "
+            "WAIT 50 SECONDS after calling batch_generate before the first check_batch_progress call. "
+            "Then continue polling every 50 seconds until status is 'completed'. "
+            "Do NOT call check_batch_progress immediately after batch_generate — the images need time to generate."
         ),
     )
 
@@ -156,13 +158,20 @@ def create_server(args: argparse.Namespace) -> FastMCP:
         max_concurrent: int | None = None,
         format: str = "png",
     ) -> str:
-        """Generate multiple images from multiple prompts concurrently.
+        """Start a batch image generation (returns immediately, does NOT block).
+
+        Returns a batch_id immediately. Images generate in the background.
+
+        IMPORTANT WORKFLOW:
+        1. Call batch_generate → returns batch_id
+        2. WAIT 50 SECONDS before calling check_batch_progress (images need time to generate)
+        3. Call check_batch_progress(batch_id) — if still in_progress, WAIT another 50 seconds and repeat
+        4. When status is "completed", the response contains all results and file paths
+
+        Do NOT call check_batch_progress immediately — always wait 50 seconds between calls.
 
         Each prompt should follow the same rules as generate_image: natural language prose,
         subject first, explicit lighting, 30-80 words each, no quality tags.
-
-        For long-running batches, use check_batch_progress to poll progress every ~50 seconds
-        to prevent timeouts. The batch_id is returned in the response.
 
         Args:
             prompts: List of natural language text prompts (max 20). Each prompt should be descriptive prose, not comma-separated tags.
@@ -314,10 +323,13 @@ def create_server(args: argparse.Namespace) -> FastMCP:
         annotations={"readOnlyHint": True}
     )
     async def check_batch_progress(batch_id: str) -> str:
-        """Check the progress of a running batch generation.
+        """Check progress of a batch generation.
 
-        Use this to monitor long-running batch generations. Poll every ~50 seconds
-        to track progress without waiting for the full batch to complete.
+        TIMING: Wait 50 seconds after batch_generate before calling this.
+        If status is still "in_progress", wait another 50 seconds before calling again.
+
+        While in progress: returns completion counts and per-image statuses.
+        When finished: returns full results with all file paths, then cleans up the batch.
 
         Args:
             batch_id: The batch ID returned by batch_generate.

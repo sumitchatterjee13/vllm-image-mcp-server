@@ -31,6 +31,9 @@ class BatchState:
     failed_count: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     cancelled: bool = False
+    finished: bool = False
+    final_result: dict[str, Any] | None = None
+    total_time: float | None = None
 
 
 # Module-level dict tracking active batches
@@ -70,7 +73,11 @@ async def batch_generate(
     max_concurrent: int | None = None,
     format: str = "png",
 ) -> dict[str, Any]:
-    """Generate multiple images concurrently with controlled parallelism."""
+    """Start a batch image generation in the background.
+
+    Returns immediately with a batch_id. Use check_batch_progress to poll
+    for results every ~50 seconds.
+    """
     if not prompts:
         return {"status": "error", "error": "No prompts provided."}
     if len(prompts) > 20:
@@ -102,7 +109,6 @@ async def batch_generate(
         registry.cached_model_name = model_name
 
     concurrency = _compute_max_concurrent(registry, model_name, max_concurrent)
-    semaphore = asyncio.Semaphore(concurrency)
 
     batch_id = f"batch_{uuid.uuid4().hex[:12]}"
     batch_state = BatchState(
@@ -111,6 +117,56 @@ async def batch_generate(
         prompts=list(prompts),
     )
     active_batches[batch_id] = batch_state
+
+    # Fire off the background runner — does NOT block the MCP response
+    asyncio.create_task(
+        _run_batch_background(
+            batch_state=batch_state,
+            client=client,
+            registry=registry,
+            output_dir=output_dir,
+            prompts=prompts,
+            width=width,
+            height=height,
+            aspect_ratio=aspect_ratio,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            seeds=seeds,
+            concurrency=concurrency,
+            format=format,
+        )
+    )
+
+    return {
+        "status": "started",
+        "batch_id": batch_id,
+        "total": len(prompts),
+        "max_concurrent": concurrency,
+        "message": (
+            f"Batch '{batch_id}' started with {len(prompts)} images. "
+            "WAIT 50 SECONDS, then call check_batch_progress(batch_id) to check status. "
+            "Do NOT call it immediately — images need time to generate."
+        ),
+    }
+
+
+async def _run_batch_background(
+    batch_state: BatchState,
+    client: VLLMClient,
+    registry: ModelRegistry,
+    output_dir: str,
+    prompts: list[str],
+    width: int | None,
+    height: int | None,
+    aspect_ratio: str | None,
+    num_inference_steps: int | None,
+    guidance_scale: float | None,
+    seeds: list[int] | None,
+    concurrency: int,
+    format: str,
+) -> None:
+    """Run the actual batch generation in the background."""
+    semaphore = asyncio.Semaphore(concurrency)
 
     async def _generate_one(index: int, prompt: str, seed: int | None) -> dict[str, Any]:
         async with semaphore:
@@ -131,7 +187,6 @@ async def batch_generate(
             )
             result["index"] = index
 
-            # Track real-time progress
             if result.get("status") == "success":
                 batch_state.completed_count += 1
             else:
@@ -187,18 +242,19 @@ async def batch_generate(
             failed += 1
 
     batch_state.results = processed
-    # Clean up completed batch
-    active_batches.pop(batch_id, None)
-
-    return {
-        "status": "success",
-        "batch_id": batch_id,
+    batch_state.total_time = round(total_time, 2)
+    batch_state.final_result = {
+        "status": "completed",
+        "batch_id": batch_state.batch_id,
         "total_time_seconds": round(total_time, 2),
         "images_generated": succeeded,
         "images_failed": failed,
         "max_concurrent": concurrency,
         "results": processed,
     }
+    batch_state.finished = True
+    logger.info("Batch %s completed: %d succeeded, %d failed in %.1fs",
+                batch_state.batch_id, succeeded, failed, total_time)
 
 
 async def cancel_batch(batch_id: str) -> dict[str, Any]:
@@ -242,7 +298,11 @@ async def cancel_batch(batch_id: str) -> dict[str, Any]:
 
 
 async def check_batch_progress(batch_id: str) -> dict[str, Any]:
-    """Check the progress of a running batch generation."""
+    """Check the progress of a running batch generation.
+
+    Returns full results once the batch is finished, then removes it from
+    the active list.
+    """
     if batch_id not in active_batches:
         return {
             "status": "not_found",
@@ -254,6 +314,12 @@ async def check_batch_progress(batch_id: str) -> dict[str, Any]:
         }
 
     batch_state = active_batches[batch_id]
+
+    # If the batch is finished, return the full results and clean up
+    if batch_state.finished and batch_state.final_result is not None:
+        active_batches.pop(batch_id, None)
+        return batch_state.final_result
+
     elapsed = (datetime.now(timezone.utc) - batch_state.created_at).total_seconds()
 
     completed = batch_state.completed_count
@@ -296,7 +362,7 @@ async def check_batch_progress(batch_id: str) -> dict[str, Any]:
             })
 
     return {
-        "status": "in_progress" if in_progress > 0 else "completed",
+        "status": "in_progress",
         "batch_id": batch_id,
         "total": batch_state.total,
         "completed": completed,
