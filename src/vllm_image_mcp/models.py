@@ -96,7 +96,7 @@ _QWEN_IMAGE_PROMPT_GUIDANCE = (
 MODEL_PROFILES: dict[str, dict[str, Any]] = {
     "black-forest-labs/FLUX.2-klein-4B": {
         "type": "distilled",
-        "default_steps": 4,
+        "default_steps": 8,
         "default_guidance_scale": 1.0,
         "supports_negative_prompt": False,
         "default_resolution": (1024, 1024),
@@ -121,7 +121,7 @@ MODEL_PROFILES: dict[str, dict[str, Any]] = {
     },
     "black-forest-labs/FLUX.2-klein-9B": {
         "type": "distilled",
-        "default_steps": 4,
+        "default_steps": 8,
         "default_guidance_scale": 1.0,
         "supports_negative_prompt": False,
         "default_resolution": (1024, 1024),
@@ -182,7 +182,7 @@ MODEL_PROFILES: dict[str, dict[str, Any]] = {
     },
     "Tongyi-MAI/Z-Image-Turbo": {
         "type": "distilled",
-        "default_steps": 8,
+        "default_steps": 12,
         "default_guidance_scale": 1.0,
         "supports_negative_prompt": False,
         "default_resolution": (1024, 1024),
