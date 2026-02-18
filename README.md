@@ -84,7 +84,7 @@ list_active_batches()
 ### From source
 
 ```bash
-git clone https://github.com/your-username/vllm-image-mcp-server.git
+git clone https://github.com/sumitchatterjee13/vllm-image-mcp-server.git
 cd vllm-image-mcp-server
 pip install -e .
 ```
